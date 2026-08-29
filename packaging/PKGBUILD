@@ -1,0 +1,36 @@
+# Maintainer: scubba
+#
+# The ewe casting daemon as a pacman package, served from the [ewe]
+# repository — built by the ewe-repo publish workflow exactly like the ewe
+# package itself (pkgver rewritten to the latest release tag, makepkg -f).
+# Headless on purpose: the shell's Cast card is the UI (RFC-004), this ships
+# only the daemon, its protocol library, and an on-demand user unit.
+pkgname=ewe-cast
+pkgver=0.9.4
+pkgrel=1
+pkgdesc="ewe casting daemon — Miracast (WFD) and Chromecast, headless, driven from Control Center"
+arch=('any')
+url="https://github.com/prj786/ewe-cast"
+license=('GPL-2.0-only')
+depends=(python
+         python-gobject
+         gstreamer
+         gst-plugins-base
+         gst-plugins-good
+         gst-plugins-bad     # mpegtsmux, fdkaacenc, hlssink2
+         gst-plugins-ugly    # x264enc software fallback (vah264enc preferred at runtime)
+         gst-plugin-pipewire
+         avahi               # Chromecast discovery
+         networkmanager)     # Wi-Fi P2P for Miracast
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 bin/ewe-castd "$pkgdir/usr/bin/ewe-castd"
+    install -d "$pkgdir/usr/lib/ewe-cast"
+    install -m644 lib/*.py "$pkgdir/usr/lib/ewe-cast/"
+    install -Dm644 systemd/ewe-cast.service \
+        "$pkgdir/usr/lib/systemd/user/ewe-cast.service"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/ewe-cast/README.md"
+}

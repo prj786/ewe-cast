@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+# ewe-castd — launcher shim. The daemon lives in lib/ (installed to
+# /usr/lib/ewe-cast); this finds it whether we run from the repo or the
+# package, mirroring how ewe's own bin/ tools behave through the symlink farm.
+import os
+import sys
+
+here = os.path.dirname(os.path.realpath(__file__))
+for cand in (os.path.join(here, "..", "lib"), "/usr/lib/ewe-cast"):
+    if os.path.exists(os.path.join(cand, "main.py")):
+        sys.path.insert(0, os.path.abspath(cand))
+        break
+
+import main  # noqa: E402
+main.main()

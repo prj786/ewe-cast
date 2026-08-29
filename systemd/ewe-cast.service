@@ -1,0 +1,14 @@
+# ewe-cast.service — the casting daemon, started on demand by the shell's
+# Cast card (never enabled at boot: no TVs, no daemon). It lives OUTSIDE the
+# shell so a hot-reload or crash of ewe.service cannot drop a running
+# presentation.
+[Unit]
+Description=ewe casting daemon (Miracast/Chromecast source)
+
+[Service]
+ExecStart=/usr/bin/ewe-castd
+Restart=on-failure
+RestartSec=2
+# a wedged pipeline must not survive a stop request — the daemon restores
+# the user's audio routing on TERM, give it a moment then be firm
+TimeoutStopSec=5
