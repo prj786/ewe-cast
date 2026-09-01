@@ -399,17 +399,22 @@ class Daemon:
             active, None, 0, on_props)
 
     def _wfd_play(self, p):
+        # mux.sink_4113 / mux.sink_4352 = TS PIDs 0x1011 (video) and 0x1100
+        # (audio), the WFD-spec-mandated elementary PIDs. The wire capture of
+        # the working gnd session showed exactly those; Samsung demuxes THOSE
+        # PIDs and silently ignores mpegtsmux's default 0x41 stream — the
+        # eighth and final field catch in the byte diff.
         audio = bool(p.get("audio")) and self.audio.start(
             reroute=not os.environ.get("EWE_CAST_FAKE_SOURCE"))
         video = self._video_src() + \
             f" ! videorate ! videoscale ! videoconvert " \
             f"! video/x-raw,width={p['width']},height={p['height']}," \
             f"framerate={p['fps']}/1 ! {self._encoder(p['width'])} " \
-            f"! h264parse config-interval=1 ! queue ! mux."
+            f"! h264parse config-interval=1 ! queue ! mux.sink_4113"
         aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
                f"! audio/x-raw,rate=48000,channels=2 ! {aac} "
-               f"! aacparse ! queue ! mux." if audio and aac else "")
+               f"! aacparse ! queue ! mux.sink_4352" if audio and aac else "")
         # a REAL RTP session (rtpbin), not a bare udpsink: rtpbin emits the
         # RTCP sender reports Samsung renderers need before they present a
         # single frame (field catch #6 — gnd's gst-rtsp-server does this,
