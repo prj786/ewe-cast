@@ -53,14 +53,12 @@ CEA_MODES = [
     (2,  720, 576, 50),
     (1,  720, 480, 60),
     (16, 1920, 1080, 25),
-    (8, 1920, 1080, 30),
-    # 720p30 preferred (last = wins): the fourth real-Samsung field lesson.
-    # The payload was proven valid (captured off the wire and decoded to a
-    # perfect frame) while the TV stayed black — 1080p at 8 Mbps over a
-    # shared 2.4 GHz channel can lose too many packets to assemble a frame.
-    # Commercial Miracast sources start at 720p for exactly this reason;
-    # 1080p becomes a setting once link stats prove the air is clean.
     (5, 1280, 720, 30),
+    # 1080p30 preferred (last = wins). It briefly dropped to 720p while the
+    # black-screen hunt suspected the air — the wire capture then proved the
+    # link pristine (0 retries, MCS 15) and the protocol at fault. With the
+    # dialect fixed, full HD is back; 720p remains the next rung down.
+    (8, 1920, 1080, 30),
 ]
 
 

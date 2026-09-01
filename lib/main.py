@@ -406,10 +406,22 @@ class Daemon:
         # eighth and final field catch in the byte diff.
         audio = bool(p.get("audio")) and self.audio.start(
             reroute=not os.environ.get("EWE_CAST_FAKE_SOURCE"))
-        video = self._video_src() + \
-            f" ! videorate ! videoscale ! videoconvert " \
-            f"! video/x-raw,width={p['width']},height={p['height']}," \
-            f"framerate={p['fps']}/1 ! {self._encoder(p['width'])} " \
+        # The compositor's frames arrive as TILED/PADDED DMA-BUFs; software
+        # videoscale/videoconvert map them as flat memory and shear the image
+        # into the "3D glasses" ghost (field catch #9). vapostproc imports
+        # DMA-BUF modifier-aware and scales/converts ON the GPU, feeding
+        # vah264enc VA-native — correct image AND no CPU burn. The software
+        # chain remains for machines without VA.
+        if Gst.ElementFactory.find("vapostproc") and Gst.ElementFactory.find("vah264enc"):
+            convert = (f" ! videorate ! vapostproc "
+                       f"! video/x-raw(memory:VAMemory),format=NV12,"
+                       f"width={p['width']},height={p['height']},framerate={p['fps']}/1 ")
+        else:
+            convert = (f" ! videorate ! videoscale ! videoconvert "
+                       f"! video/x-raw,format=NV12,width={p['width']},height={p['height']},"
+                       f"framerate={p['fps']}/1 ")
+        video = self._video_src() + convert + \
+            f"! {self._encoder(p['width'])} " \
             f"! h264parse config-interval=1 ! queue ! mux.sink_4113"
         aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
@@ -461,7 +473,7 @@ class Daemon:
         audio = self.audio.start()
         video = self._video_src() + \
             f" ! videorate ! videoscale ! videoconvert " \
-            f"! video/x-raw,width=1280,height=720,framerate=30/1 " \
+            f"! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 " \
             f"! {self._encoder(1280)} ! h264parse ! hls.video"
         aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
@@ -513,9 +525,9 @@ class Daemon:
         return None
 
     def _encoder(self, width=1920):
-        # bitrate follows the picked mode: 720p rides 2.4 GHz at 5 Mbps far
-        # more reliably than 1080p at 8 (loss resilience > pixels on air)
-        br = 5000 if width <= 1280 else 8000
+        # bitrate follows the picked mode; the link-stats journal showed a
+        # pristine channel (0 retries at MCS 15), so 1080p gets real headroom
+        br = 5000 if width <= 1280 else 10000
         # hardware first (any VA driver), x264's zerolatency tune second —
         # both end in byte-stream H.264 the TS mux is happy with
         # constrained-baseline, both paths: the SECOND real-Samsung field-test
