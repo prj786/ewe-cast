@@ -566,6 +566,11 @@ class Daemon:
     def stop(self, why="", failed=True):
         was = self.state
         self._pipeline_stop()
+        # every cast leaves an 'ewe-cast' NM profile behind (AddAndActivate
+        # creates one per session) — 16 of them piled up in a day of field
+        # testing. Best-effort sweep on every stop.
+        subprocess.Popen(["sh", "-c", "nmcli connection delete ewe-cast >/dev/null 2>&1 || true"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if self.cc:
             self.cc.stop()
             self.cc = None
