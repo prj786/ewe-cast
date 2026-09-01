@@ -412,7 +412,8 @@ class Daemon:
                f"! aacparse ! queue ! mux." if audio and aac else "")
         line = (f"mpegtsmux name=mux alignment=7 "
                 f"! rtpmp2tpay pt=33 mtu=1400 "
-                f"! udpsink host={p['host']} port={p['port']} sync=true {video}{aud}")
+                f"! udpsink host={p['host']} port={p['port']} "
+                f"bind-port={wfd_mod.SERVER_RTP_PORT} sync=true {video}{aud}")
         self._pipeline_run(line)
         self._set("streaming", "")
         GLib.timeout_add_seconds(15, self._link_stats_tick)

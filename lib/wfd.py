@@ -36,6 +36,13 @@ import socket
 from gi.repository import GLib
 
 RTSP_PORT = 7236
+# The RTP source port we ANNOUNCE in the SETUP Transport header. The
+# fifth real-Samsung field catch: we declared it, then streamed from a
+# random ephemeral port — strict sinks filter RTP by the announced
+# source port, so the session stayed healthy while zero media arrived
+# (gnome-network-displays works because gst-rtsp-server binds it).
+# udpsink must bind-port= this exact value.
+SERVER_RTP_PORT = 15550
 KEEPALIVE_S = 25
 
 # CEA resolution bitmap (wfd_video_formats), the entries we are willing to
@@ -217,7 +224,7 @@ class WfdSource:
             self.sink_rtp_port = int(m.group(1)) if m else 1028
             self._respond(headers, headers={
                 "Session": f"{self.session_id};timeout=60",
-                "Transport": f"RTP/AVP/UDP;unicast;client_port={self.sink_rtp_port};server_port=15550"})
+                "Transport": f"RTP/AVP/UDP;unicast;client_port={self.sink_rtp_port};server_port={SERVER_RTP_PORT}"})
         elif method == "PLAY":            # M7 — roll tape
             self._respond(headers, headers={"Session": self.session_id, "Range": "npt=now-"})
             self.on_state("starting", "the TV asked for the stream")
