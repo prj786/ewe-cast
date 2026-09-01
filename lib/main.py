@@ -22,6 +22,7 @@
 #                            path is exercised without a TV
 
 import json
+import uuid
 import os
 import shutil
 import subprocess
@@ -63,8 +64,13 @@ class PortalScreenCast:
         self._n = 0
 
     def _token(self):
+        # globally unique per call — a per-instance counter reset on every
+        # cast made the SECOND cast reuse the first session's token, and
+        # xdg-desktop-portal answered "Failed to register object vtable
+        # (File exists)" → instant "screen selection failed" on every retry
+        # (the THIRD real-Samsung field-test catch)
         self._n += 1
-        return f"ewecast{os.getpid()}_{self._n}"
+        return f"ewecast{os.getpid()}_{self._n}_{uuid.uuid4().hex[:8]}"
 
     def _expect(self, token, cb):
         sender = self.bus.get_unique_name()[1:].replace(".", "_")
@@ -345,13 +351,22 @@ class Daemon:
         else:                             # EWE_CAST_TEST_SINK: already routable
             self._set("waiting", "waiting for the TV to dial in")
 
+    # WFD Device Information subelement — WITHOUT this in our P2P frames the
+    # TV associates and then just sits there: nothing tells it we are a
+    # Miracast SOURCE or where to dial. Found in the first real-Samsung field
+    # test (the TV joined the group, took a DHCP lease, and never opened
+    # RTSP). id=0x00, len=6; body: devinfo 0x0010 (source, session
+    # available), RTSP port 7236 (0x1c44), max throughput 50 Mbps (0x0032).
+    WFD_IES = bytes.fromhex("00000600101c440032")
+
     def _p2p_connect(self, sink):
         conn = {
             "connection": {"type": GLib.Variant("s", "wifi-p2p"),
                            "id": GLib.Variant("s", "ewe-cast"),
                            "autoconnect": GLib.Variant("b", False)},
             "wifi-p2p": {"peer": GLib.Variant("s", sink["hw"]),
-                         "wps-method": GLib.Variant("u", 0x4)},   # PBC — push-button, what TVs expect
+                         "wps-method": GLib.Variant("u", 0x4),   # PBC — push-button, what TVs expect
+                         "wfd-ies": GLib.Variant("ay", self.WFD_IES)},
         }
         self.bus.call(
             NM, "/org/freedesktop/NetworkManager", NM, "AddAndActivateConnection",
@@ -464,10 +479,15 @@ class Daemon:
     def _encoder(self):
         # hardware first (any VA driver), x264's zerolatency tune second —
         # both end in byte-stream H.264 the TS mux is happy with
+        # constrained-baseline, both paths: the SECOND real-Samsung field-test
+        # catch. Unconstrained vah264enc negotiated High with features the
+        # TV's Miracast decoder refused — RTSP marched through PLAY and the
+        # screen stayed black. CBP is the profile every WFD sink MUST decode.
         if Gst.ElementFactory.find("vah264enc"):
-            return "vah264enc bitrate=8000 key-int-max=60"
+            return ("vah264enc bitrate=8000 key-int-max=60 "
+                    "! video/x-h264,profile=constrained-baseline")
         return ("x264enc tune=zerolatency speed-preset=veryfast bitrate=8000 "
-                "key-int-max=60 ! video/x-h264,profile=high")
+                "key-int-max=60 ! video/x-h264,profile=constrained-baseline")
 
     def _pipeline_fake(self):
         self._pipeline_run(self._video_src()
