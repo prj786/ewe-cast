@@ -12,6 +12,7 @@
 # 720p30/1080p30, AAC audio, RTP on 19000.
 import json
 import re
+import os
 import socket
 import sys
 import time
@@ -117,7 +118,12 @@ udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 udp.bind((HOST, RTP_PORT))
 udp.settimeout(10)
 t_end = time.monotonic() + 6
-while time.monotonic() < t_end and verdict["rtp_packets"] < 300:
+# EWE_SIM_DUMP=<path>: append every valid TS payload to a file, so what a
+# real TV receives can be decoded and LOOKED AT (field-debugging black
+# screens: the RTP/TS framing can be perfect while the H.264 inside is not)
+dump = open(os.environ["EWE_SIM_DUMP"], "wb") if os.environ.get("EWE_SIM_DUMP") else None
+limit = int(os.environ.get("EWE_SIM_PACKETS", "300"))
+while time.monotonic() < t_end and verdict["rtp_packets"] < limit:
     try:
         pkt = udp.recv(4096)
     except socket.timeout:
@@ -129,6 +135,10 @@ while time.monotonic() < t_end and verdict["rtp_packets"] < 300:
     payload = pkt[12:]
     if len(payload) % 188 == 0 and all(payload[i] == 0x47 for i in range(0, len(payload), 188)):
         verdict["ts_ok"] += 1
+        if dump:
+            dump.write(payload)
+if dump:
+    dump.close()
 
 # be a polite TV about it
 try:

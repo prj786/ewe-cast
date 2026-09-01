@@ -45,9 +45,15 @@ CEA_MODES = [
     (0,  640, 480, 60),    # bit 0 is mandatory-supported by every sink
     (2,  720, 576, 50),
     (1,  720, 480, 60),
-    (5, 1280, 720, 30),
     (16, 1920, 1080, 25),
     (8, 1920, 1080, 30),
+    # 720p30 preferred (last = wins): the fourth real-Samsung field lesson.
+    # The payload was proven valid (captured off the wire and decoded to a
+    # perfect frame) while the TV stayed black — 1080p at 8 Mbps over a
+    # shared 2.4 GHz channel can lose too many packets to assemble a frame.
+    # Commercial Miracast sources start at 720p for exactly this reason;
+    # 1080p becomes a setting once link stats prove the air is clean.
+    (5, 1280, 720, 30),
 ]
 
 

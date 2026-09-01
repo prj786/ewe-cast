@@ -404,7 +404,7 @@ class Daemon:
         video = self._video_src() + \
             f" ! videorate ! videoscale ! videoconvert " \
             f"! video/x-raw,width={p['width']},height={p['height']}," \
-            f"framerate={p['fps']}/1 ! {self._encoder()} " \
+            f"framerate={p['fps']}/1 ! {self._encoder(p['width'])} " \
             f"! h264parse config-interval=1 ! queue ! mux."
         aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
@@ -415,6 +415,25 @@ class Daemon:
                 f"! udpsink host={p['host']} port={p['port']} sync=true {video}{aud}")
         self._pipeline_run(line)
         self._set("streaming", "")
+        GLib.timeout_add_seconds(15, self._link_stats_tick)
+
+    def _link_stats_tick(self):
+        """journal the P2P station's tx counters every 15 s while streaming —
+        black-screen debugging needs to know whether the AIR is eating the
+        stream (retries/failed climbing = the 2.4 GHz channel is losing us)"""
+        if self.state != "streaming":
+            return False
+        try:
+            out = subprocess.run(
+                ["sh", "-c",
+                 "for i in /sys/class/net/p2p-*; do iw dev \"${i##*/}\" station dump; done 2>/dev/null"
+                 " | grep -E 'tx (retries|failed|bitrate)|signal:'"],
+                capture_output=True, text=True, timeout=5).stdout
+            if out:
+                print("link: " + " | ".join(" ".join(l.split()) for l in out.splitlines()), flush=True)
+        except Exception:
+            pass
+        return True
 
     # ── chromecast ────────────────────────────────────────────────────────
     def _start_chromecast(self, sink):
@@ -426,7 +445,7 @@ class Daemon:
         video = self._video_src() + \
             f" ! videorate ! videoscale ! videoconvert " \
             f"! video/x-raw,width=1280,height=720,framerate=30/1 " \
-            f"! {self._encoder()} ! h264parse ! hls.video"
+            f"! {self._encoder(1280)} ! h264parse ! hls.video"
         aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
                f"! {aac} ! aacparse ! hls.audio" if audio and aac else "")
@@ -476,7 +495,10 @@ class Daemon:
                 return f"{e} bitrate=128000"
         return None
 
-    def _encoder(self):
+    def _encoder(self, width=1920):
+        # bitrate follows the picked mode: 720p rides 2.4 GHz at 5 Mbps far
+        # more reliably than 1080p at 8 (loss resilience > pixels on air)
+        br = 5000 if width <= 1280 else 8000
         # hardware first (any VA driver), x264's zerolatency tune second —
         # both end in byte-stream H.264 the TS mux is happy with
         # constrained-baseline, both paths: the SECOND real-Samsung field-test
@@ -484,10 +506,10 @@ class Daemon:
         # TV's Miracast decoder refused — RTSP marched through PLAY and the
         # screen stayed black. CBP is the profile every WFD sink MUST decode.
         if Gst.ElementFactory.find("vah264enc"):
-            return ("vah264enc bitrate=8000 key-int-max=60 "
-                    "! video/x-h264,profile=constrained-baseline")
-        return ("x264enc tune=zerolatency speed-preset=veryfast bitrate=8000 "
-                "key-int-max=60 ! video/x-h264,profile=constrained-baseline")
+            return ("vah264enc bitrate={br} key-int-max=30 "
+                    "! video/x-h264,profile=constrained-baseline").format(br=br)
+        return ("x264enc tune=zerolatency speed-preset=veryfast bitrate={br} "
+                "key-int-max=30 ! video/x-h264,profile=constrained-baseline").format(br=br)
 
     def _pipeline_fake(self):
         self._pipeline_run(self._video_src()
