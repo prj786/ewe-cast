@@ -6,7 +6,7 @@
 # Headless on purpose: the shell's Cast card is the UI (RFC-004), this ships
 # only the daemon, its protocol library, and an on-demand user unit.
 pkgname=ewe-cast
-pkgver=0.9.7
+pkgver=0.9.8
 pkgrel=1
 pkgdesc="ewe casting daemon — Miracast (WFD) and Chromecast, headless, driven from Control Center"
 arch=('any')
