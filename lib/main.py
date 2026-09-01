@@ -417,7 +417,8 @@ class Daemon:
         rtp, rtcp = p["port"], p["port"] + 1
         line = (f"rtpbin name=rtpb "
                 f"mpegtsmux name=mux alignment=7 "
-                f"! rtpmp2tpay pt=33 mtu=1400 ! rtpb.send_rtp_sink_0 "
+                f"! rtpmp2tpay pt=33 mtu=1400 ssrc=1 seqnum-offset=1 timestamp-offset=0 "
+                f"! rtpb.send_rtp_sink_0 "
                 f"rtpb.send_rtp_src_0 ! udpsink host={p['host']} port={rtp} "
                 f"bind-port={wfd_mod.SERVER_RTP_PORT} sync=true "
                 f"rtpb.send_rtcp_src_0 ! udpsink host={p['host']} port={rtcp} "

@@ -238,13 +238,26 @@ class WfdSource:
             # the SR to establish the presentation clock and will decode
             # forever WITHOUT PRESENTING if none arrive. Black glass, healthy
             # session. We now declare and serve the same pair.
+            # Transport mirrors gnd's working reply: RTP/AVP (no /UDP), port
+            # PAIRS both sides, and — decisive for Samsung — the declared
+            # ssrc=00000001 the pipeline is pinned to. The sink filters RTP
+            # by announced identity; an unannounced random SSRC is discarded
+            # forever with the session left "healthy". (field catch #7)
             self._respond(headers, headers={
                 "Session": f"{self.session_id};timeout=60",
-                "Transport": (f"RTP/AVP/UDP;unicast;"
+                "Transport": (f"RTP/AVP;unicast;"
                               f"client_port={self.sink_rtp_port}-{self.sink_rtp_port + 1};"
-                              f"server_port={SERVER_RTP_PORT}-{SERVER_RTP_PORT + 1}")})
+                              f"server_port={SERVER_RTP_PORT}-{SERVER_RTP_PORT + 1};"
+                              f"ssrc=00000001;mode=\"PLAY\"")})
         elif method == "PLAY":            # M7 — roll tape
-            self._respond(headers, headers={"Session": self.session_id, "Range": "npt=now-"})
+            # RTP-Info hands the sink the stream's starting seq/rtptime —
+            # gnd sends it, Samsung waits for it; the pipeline pins the
+            # matching seqnum-offset=1 / timestamp-offset=0
+            local_ip = self.conn.get_local_address().get_address().to_string()
+            self._respond(headers, headers={
+                "Session": self.session_id,
+                "RTP-Info": f"url=rtsp://{local_ip}:{RTSP_PORT}/wfd1.0/streamid=0;seq=1;rtptime=0",
+                "Range": "npt=now-"})
             self.on_state("starting", "the TV asked for the stream")
             self.on_ready({
                 "host": self.peer_ip,
@@ -304,12 +317,19 @@ class WfdSource:
         local_ip = self.conn.get_local_address().get_address().to_string()
         audio_line = "wfd_audio_codecs: AAC 00000001 00\r\n" if audio == "aac" else \
                      "wfd_audio_codecs: LPCM 00000002 00\r\n" if audio == "lpcm" else ""
+        # M4 mirrors the wire capture of a WORKING gnd session verbatim
+        # (field catch #7): profile 01 = constrained-baseline — the profile we
+        # actually STREAM and the only one this TV supports (we used to say
+        # 02/CHP, configuring the decoder for a profile it doesn't have);
+        # presentation URL carries :7236; the RTCP port rides in
+        # client_rtp_ports; frame-rate-control field is 01.
+        rtcp = (self.sink_rtp_port or 1028) + 1
         self._send_request(
             "SET_PARAMETER", "rtsp://localhost/wfd1.0", {},
-            f"wfd_video_formats: 00 00 02 10 {1 << bit:08x} 00000000 00000000 00 0000 0000 11 none none\r\n"
+            f"wfd_video_formats: 00 00 01 10 {1 << bit:08x} 00000000 00000000 00 0000 0000 01 none none\r\n"
             + audio_line
-            + f"wfd_presentation_URL: rtsp://{local_ip}/wfd1.0/streamid=0 none\r\n"
-            + f"wfd_client_rtp_ports: RTP/AVP/UDP;unicast {self.sink_rtp_port or 1028} 0 mode=play\r\n",
+            + f"wfd_presentation_URL: rtsp://{local_ip}:{RTSP_PORT}/wfd1.0/streamid=0 none\r\n"
+            + f"wfd_client_rtp_ports: RTP/AVP/UDP;unicast {self.sink_rtp_port or 1028} {rtcp} mode=play\r\n",
             cb=self._m4_done)
 
     def _m4_done(self, status, headers, body):
