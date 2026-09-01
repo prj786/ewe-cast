@@ -175,6 +175,7 @@ class WfdSource:
         body = rest[:clen].decode("utf-8", "replace")
         self.buf = rest[clen:]
         first = lines[0]
+        self._wire("<<", head.decode("utf-8", "replace") + "\r\n" + body)
         if first.startswith("RTSP/1.0"):
             m = re.match(r"RTSP/1\.0\s+(\d+)", first)
             status = int(m.group(1)) if m else 0
@@ -192,6 +193,12 @@ class WfdSource:
         if self.conn:
             self.conn.get_output_stream().write_all(text.encode(), None)
 
+    @staticmethod
+    def _wire(direction, text):
+        """full RTSP wire log — black screens hide in single header fields,
+        so the journal carries every message verbatim (they are tiny)"""
+        print(f"rtsp {direction} | " + " \\n ".join(text.rstrip().splitlines()), flush=True)
+
     def _send_request(self, method, url, headers=None, body="", cb=None):
         self.cseq += 1
         h = {"CSeq": str(self.cseq)}
@@ -203,6 +210,7 @@ class WfdSource:
             + "".join(f"{k}: {v}\r\n" for k, v in h.items()) + "\r\n" + body
         if cb:
             self.pending[str(self.cseq)] = cb
+        self._wire(">>", msg)
         self._write(msg)
 
     def _respond(self, req_headers, status="200 OK", headers=None, body=""):
@@ -211,8 +219,10 @@ class WfdSource:
         if body:
             h["Content-Type"] = "text/parameters"
             h["Content-Length"] = str(len(body))
-        self._write(f"RTSP/1.0 {status}\r\n"
-                    + "".join(f"{k}: {v}\r\n" for k, v in h.items()) + "\r\n" + body)
+        out = (f"RTSP/1.0 {status}\r\n"
+               + "".join(f"{k}: {v}\r\n" for k, v in h.items()) + "\r\n" + body)
+        self._wire(">>", out)
+        self._write(out)
 
     # ── the sink's requests (M2, M6, M7, teardown) ────────────────────────
     def _handle_request(self, method, url, headers, body):
@@ -222,9 +232,17 @@ class WfdSource:
         elif method == "SETUP":           # M6 — the transport answer we've been waiting for
             m = re.search(r"client_port=(\d+)", headers.get("transport", ""))
             self.sink_rtp_port = int(m.group(1)) if m else 1028
+            # port PAIRS, rtp-rtcp: the sixth real-Samsung field catch. gnd
+            # works because gst-rtsp-server runs a real RTP session with
+            # RTCP sender reports on client_port+1 — Samsung renderers use
+            # the SR to establish the presentation clock and will decode
+            # forever WITHOUT PRESENTING if none arrive. Black glass, healthy
+            # session. We now declare and serve the same pair.
             self._respond(headers, headers={
                 "Session": f"{self.session_id};timeout=60",
-                "Transport": f"RTP/AVP/UDP;unicast;client_port={self.sink_rtp_port};server_port={SERVER_RTP_PORT}"})
+                "Transport": (f"RTP/AVP/UDP;unicast;"
+                              f"client_port={self.sink_rtp_port}-{self.sink_rtp_port + 1};"
+                              f"server_port={SERVER_RTP_PORT}-{SERVER_RTP_PORT + 1}")})
         elif method == "PLAY":            # M7 — roll tape
             self._respond(headers, headers={"Session": self.session_id, "Range": "npt=now-"})
             self.on_state("starting", "the TV asked for the stream")

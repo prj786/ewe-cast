@@ -410,10 +410,20 @@ class Daemon:
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
                f"! audio/x-raw,rate=48000,channels=2 ! {aac} "
                f"! aacparse ! queue ! mux." if audio and aac else "")
-        line = (f"mpegtsmux name=mux alignment=7 "
-                f"! rtpmp2tpay pt=33 mtu=1400 "
-                f"! udpsink host={p['host']} port={p['port']} "
-                f"bind-port={wfd_mod.SERVER_RTP_PORT} sync=true {video}{aud}")
+        # a REAL RTP session (rtpbin), not a bare udpsink: rtpbin emits the
+        # RTCP sender reports Samsung renderers need before they present a
+        # single frame (field catch #6 — gnd's gst-rtsp-server does this,
+        # we didn't, same pixels never reached the glass)
+        rtp, rtcp = p["port"], p["port"] + 1
+        line = (f"rtpbin name=rtpb "
+                f"mpegtsmux name=mux alignment=7 "
+                f"! rtpmp2tpay pt=33 mtu=1400 ! rtpb.send_rtp_sink_0 "
+                f"rtpb.send_rtp_src_0 ! udpsink host={p['host']} port={rtp} "
+                f"bind-port={wfd_mod.SERVER_RTP_PORT} sync=true "
+                f"rtpb.send_rtcp_src_0 ! udpsink host={p['host']} port={rtcp} "
+                f"bind-port={wfd_mod.SERVER_RTP_PORT + 1} sync=false async=false "
+                f"udpsrc port={wfd_mod.SERVER_RTP_PORT + 1} ! rtpb.recv_rtcp_sink_0 "
+                f"{video}{aud}")
         self._pipeline_run(line)
         self._set("streaming", "")
         GLib.timeout_add_seconds(15, self._link_stats_tick)
