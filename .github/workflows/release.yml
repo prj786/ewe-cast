@@ -1,0 +1,55 @@
+# Build the Arch package for every version tag and attach it to the GitHub
+# release — the same contract Komble, ewe-settings and ewe-sync follow.
+#
+# The [ewe] repository already built ewe-cast from source in its own publish
+# workflow, so this is not what puts it in the repo. It is what makes ewe-cast
+# a first-party app in Komble: install_first_party downloads the release's
+# prebuilt .pkg.tar.zst, and before this workflow existed ewe-cast's releases
+# carried no assets at all, so its card would have failed with "the release has
+# no prebuilt package for this machine".
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: Build Arch package
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm --needed git github-cli
+
+      - name: Check out the tag
+        uses: actions/checkout@v4
+
+      - name: Build the package with makepkg
+        run: |
+          pkgver="${GITHUB_REF_NAME#v}"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # the source tarball IS this checkout — no network fetch, no
+          # checksum chicken-and-egg (same trick as ewe-sync's release.yml)
+          git archive --format=tar.gz --prefix="ewe-cast-$pkgver/" \
+            -o "packaging/ewe-cast-$pkgver.tar.gz" HEAD
+          cd packaging
+          sed -i "s/^pkgver=.*/pkgver=$pkgver/" PKGBUILD
+          useradd -m builder
+          chown -R builder: .
+          # -d: this is a pure-Python, arch=any package — the runtime deps
+          # (gstreamer, networkmanager…) are not needed to assemble it
+          su builder -c "makepkg -d --noconfirm --skipchecksums"
+
+      - name: Attach the package to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd packaging
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes *.pkg.tar.zst \
+          || gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+               --clobber *.pkg.tar.zst
