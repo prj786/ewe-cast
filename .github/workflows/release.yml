@@ -31,6 +31,12 @@ jobs:
       - name: Build the package with makepkg
         run: |
           pkgver="${GITHUB_REF_NAME#v}"
+          # A git tag may carry a pre-release suffix (v0.12.0-beta); an Arch
+          # pkgver may not contain a hyphen. Strip it: 0.12.0-beta ->
+          # 0.12.0beta, which is also the ONLY form that vercmp sorts BELOW
+          # the eventual 0.12.0 (0.12.0_beta and 0.12.0.beta both sort above
+          # it, which would strand everyone on the beta).
+          pkgver="${pkgver//-/}"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           # the source tarball IS this checkout — no network fetch, no
           # checksum chicken-and-egg (same trick as ewe-sync's release.yml)
