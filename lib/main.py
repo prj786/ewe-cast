@@ -404,7 +404,23 @@ class Daemon:
         # the working gnd session showed exactly those; Samsung demuxes THOSE
         # PIDs and silently ignores mpegtsmux's default 0x41 stream — the
         # eighth and final field catch in the byte diff.
-        audio = bool(p.get("audio")) and self.audio.start(
+        # Take the user's audio ONLY if we can actually deliver it. start()
+        # creates a null sink, makes it the default and moves every stream
+        # onto it; if the encoder branch is then not built, all that audio
+        # plays into a sink nobody reads — the user sees "Cast" appear as
+        # their output and hears nothing, anywhere. Silence is worse than no
+        # casting, so the question "can we encode?" comes first.
+        #
+        # Two ways to fail: no AAC encoder on the box (gst-plugins-bad
+        # missing), or a TV that only offered LPCM, which this pipeline does
+        # not mux. Either way keep the audio where it is.
+        aac = self._aac()
+        want_audio = p.get("audio") == "aac" and bool(aac)
+        if p.get("audio") and not want_audio:
+            self.on_state(self.state, "casting video only — "
+                          + ("this TV only offered LPCM audio" if p.get("audio") != "aac"
+                             else "no AAC encoder found (install gst-plugins-bad)"))
+        audio = want_audio and self.audio.start(
             reroute=not os.environ.get("EWE_CAST_FAKE_SOURCE"))
         # The compositor's frames arrive as TILED/PADDED DMA-BUFs; software
         # videoscale/videoconvert map them as flat memory and shear the image
@@ -423,7 +439,6 @@ class Daemon:
         video = self._video_src() + convert + \
             f"! {self._encoder(p['width'])} " \
             f"! h264parse config-interval=1 ! queue ! mux.sink_4113"
-        aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
                f"! audio/x-raw,rate=48000,channels=2 ! {aac} "
                f"! aacparse ! queue ! mux.sink_4352" if audio and aac else "")
@@ -470,12 +485,17 @@ class Daemon:
         for f in os.listdir(HLS_DIR):
             os.unlink(os.path.join(HLS_DIR, f))
         self._serve_hls()
-        audio = self.audio.start()
+        # Same rule as the WFD path: do not move the user's audio onto a null
+        # sink we cannot read back out of.
+        aac = self._aac()
+        if not aac:
+            self.on_state(self.state, "casting video only — no AAC encoder "
+                                      "found (install gst-plugins-bad)")
+        audio = bool(aac) and self.audio.start()
         video = self._video_src() + \
             f" ! videorate ! videoscale ! videoconvert " \
             f"! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 " \
             f"! {self._encoder(1280)} ! h264parse ! hls.video"
-        aac = self._aac()
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
                f"! {aac} ! aacparse ! hls.audio" if audio and aac else "")
         line = (f"hlssink2 name=hls target-duration=2 max-files=6 playlist-length=4 "

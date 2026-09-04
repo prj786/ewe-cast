@@ -1,0 +1,4 @@
+
+# build artefact, committed by accident in a070f58
+__pycache__/
+*.pyc
