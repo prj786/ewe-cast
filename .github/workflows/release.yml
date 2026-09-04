@@ -55,7 +55,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd packaging
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+          # a tag carrying -alpha/-beta is not "Latest"
+          pre=""; case "$GITHUB_REF_NAME" in *-alpha*|*-beta*) pre="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" $pre \
             --title "$GITHUB_REF_NAME" --generate-notes *.pkg.tar.zst \
           || gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
                --clobber *.pkg.tar.zst
