@@ -40,10 +40,18 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           # the source tarball IS this checkout — no network fetch, no
           # checksum chicken-and-egg (same trick as ewe-sync's release.yml)
-          git archive --format=tar.gz --prefix="ewe-cast-$pkgver/" \
+          # The PKGBUILD enters "$pkgname-${_tag#v}" — the directory GitHub's
+          # own tarball extracts to — so the local archive must use the TAG
+          # for its prefix, not pkgver: "ewe-cast-0.12.1-beta/", with the
+          # hyphen. Prefixing with pkgver produced "ewe-cast-0.12.1beta/" and
+          # package() died on `cd`. Both versions are written in, as in the
+          # other app repos.
+          git archive --format=tar.gz --prefix="ewe-cast-${GITHUB_REF_NAME#v}/" \
             -o "packaging/ewe-cast-$pkgver.tar.gz" HEAD
           cd packaging
+          sed -i "s/^_tag=.*/_tag=$GITHUB_REF_NAME/" PKGBUILD
           sed -i "s/^pkgver=.*/pkgver=$pkgver/" PKGBUILD
+          grep -E '^(_tag|pkgver)=' PKGBUILD
           useradd -m builder
           chown -R builder: .
           # -d: this is a pure-Python, arch=any package — the runtime deps
