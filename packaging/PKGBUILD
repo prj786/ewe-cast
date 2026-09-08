@@ -12,8 +12,8 @@ pkgname=ewe-cast
 # 0.12.0 under vercmp. GitHub's archive is addressed by the TAG and extracts to
 # <repo>-<tag without the leading v>, so both the source URL and the directory
 # below follow _tag, never pkgver. ewe-repo's publish workflow rewrites both.
-_tag=v0.12.0-beta
-pkgver=0.12.0beta
+_tag=v0.12.1-beta
+pkgver=0.12.1beta
 pkgrel=1
 pkgdesc="ewe casting daemon — Miracast (WFD) and Chromecast, headless, driven from Control Center"
 arch=('any')
