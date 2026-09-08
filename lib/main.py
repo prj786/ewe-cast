@@ -533,8 +533,10 @@ class Daemon:
     # ── pipeline ──────────────────────────────────────────────────────────
     def _video_src(self):
         if os.environ.get("EWE_CAST_FAKE_SOURCE") or self.src_node is None:
-            return "videotestsrc is-live=true pattern=smpte"
-        return f"pipewiresrc fd={self.src_fd} path={self.src_node} do-timestamp=true"
+            return "videotestsrc is-live=true pattern=smpte ! identity name=wd silent=true"
+        # `wd` is where the watchdog counts frames — see _pipeline_run
+        return (f"pipewiresrc fd={self.src_fd} path={self.src_node} do-timestamp=true "
+                f"! identity name=wd silent=true")
 
     def _aac(self):
         # AAC encoder roulette: fdk (bad+libfdk) is the usual Arch resident,
@@ -564,6 +566,16 @@ class Daemon:
         self._pipeline_run(self._video_src()
                            + " ! videoconvert ! x264enc tune=zerolatency bitrate=2000 ! fakesink")
 
+    # ── the watchdog ──────────────────────────────────────────────────────
+    # "Frozen image and no sound" is what a STALLED capture looks like from
+    # the sofa: the TV keeps showing the last frame it got, and since audio
+    # is muxed into the same stream it stops with the video. Nothing on the
+    # bus says so — a source that simply stops producing raises no error —
+    # so the daemon sat in "streaming" forever, looking healthy. Count frames
+    # through the identity after the source; no frame for STALL_S seconds
+    # while we claim to be streaming is a failure, reported as one.
+    STALL_S = 6
+
     def _pipeline_run(self, line):
         self._pipeline_stop()
         print(f"pipeline: {line}", flush=True)
@@ -571,13 +583,51 @@ class Daemon:
         gbus = self.pipeline.get_bus()
         gbus.add_signal_watch()
         gbus.connect("message::error", self._gst_error)
+        gbus.connect("message::warning", self._gst_warning)
+        gbus.connect("message::eos", lambda b, m: self.stop("the capture ended (portal closed the stream)"))
+        gbus.connect("message::state-changed", self._gst_state)
+        self._frames = 0
+        self._frames_seen = 0
+        wd = self.pipeline.get_by_name("wd")
+        if wd:
+            wd.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._on_frame)
+            self._wd_src = GLib.timeout_add_seconds(self.STALL_S, self._check_stall)
         self.pipeline.set_state(Gst.State.PLAYING)
+
+    def _on_frame(self, pad, info):
+        self._frames += 1
+        return Gst.PadProbeReturn.OK
+
+    def _check_stall(self):
+        if not self.pipeline:
+            return False
+        if self._frames == self._frames_seen:
+            print(f"watchdog: no frames in {self.STALL_S}s (total {self._frames}) — stalled", flush=True)
+            self.stop("the screen capture stalled — no frames for "
+                      f"{self.STALL_S}s (portal / PipeWire). Stop and start the cast again")
+            return False
+        print(f"watchdog: {self._frames - self._frames_seen} frames / {self.STALL_S}s", flush=True)
+        self._frames_seen = self._frames
+        return True
 
     def _gst_error(self, bus, msg):
         err, dbg = msg.parse_error()
+        print(f"gst error: {err.message} | {dbg}", flush=True)
         self.stop(f"stream broke: {err.message}")
 
+    def _gst_warning(self, bus, msg):
+        err, dbg = msg.parse_warning()
+        print(f"gst warning: {err.message} | {dbg}", flush=True)
+
+    def _gst_state(self, bus, msg):
+        if self.pipeline and msg.src == self.pipeline:
+            old, new, _ = msg.parse_state_changed()
+            print(f"gst state: {old.value_nick} -> {new.value_nick}", flush=True)
+
     def _pipeline_stop(self):
+        if getattr(self, "_wd_src", None):
+            GLib.source_remove(self._wd_src)
+            self._wd_src = None
         if self.pipeline:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
@@ -635,7 +685,62 @@ class Daemon:
         loop.run()
 
 
+def diagnose():
+    """What a cast needs, and whether this machine has it — for a bug report.
+
+    Run it on the machine with the TV; paste the output. It answers the
+    questions the daemon otherwise only answers by failing: which encoders
+    exist, whether the portal can hand over a stream, and whether that
+    stream actually carries frames."""
+    def have(e):
+        return "yes" if Gst.ElementFactory.find(e) else "NO"
+    def pkg(n):
+        out = subprocess.run(["pacman", "-Q", n], capture_output=True, text=True)
+        return out.stdout.strip() or f"{n}: not installed"
+    print("== encoders ==")
+    for e in ("vah264enc", "vapostproc", "x264enc", "fdkaacenc", "faac", "avenc_aac",
+              "pipewiresrc", "mpegtsmux", "hlssink2", "rtpbin"):
+        print(f"  {e:<12} {have(e)}")
+    print("== packages ==")
+    for n in ("xdg-desktop-portal-hyprland", "gst-plugins-bad", "gst-plugin-va",
+              "gst-plugin-pipewire", "pipewire"):
+        print(f"  {pkg(n)}")
+    print("== services ==")
+    for u in ("NetworkManager.service", "avahi-daemon.service"):
+        st = subprocess.run(["systemctl", "is-active", u], capture_output=True, text=True).stdout.strip()
+        print(f"  {u:<24} {st}")
+    print("== capture probe (the picker will open — pick a screen) ==")
+    loop = GLib.MainLoop()
+    frames = {"n": 0}
+    pipe = {"p": None}
+    def on_src(fd, node):
+        line = (f"pipewiresrc fd={fd} path={node} do-timestamp=true "
+                f"! identity name=wd silent=true ! fakesink sync=false")
+        p = Gst.parse_launch(line)
+        pipe["p"] = p
+        p.get_by_name("wd").get_static_pad("src").add_probe(
+            Gst.PadProbeType.BUFFER, lambda pad, info: (frames.__setitem__("n", frames["n"] + 1), Gst.PadProbeReturn.OK)[1])
+        p.get_bus().add_signal_watch()
+        p.get_bus().connect("message::error", lambda b, m: print(f"  gst error: {m.parse_error()[0].message}"))
+        p.set_state(Gst.State.PLAYING)
+        print(f"  stream: fd={fd} node={node} — counting for 5s")
+        GLib.timeout_add_seconds(5, lambda: (print(f"  frames in 5s: {frames['n']}"
+                                                   + ("" if frames["n"] else "   <-- STALL: the portal handed over a stream that carries nothing")),
+                                             loop.quit(), False)[2])
+    def on_fail(msg):
+        print(f"  portal: {msg}")
+        loop.quit()
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    PortalScreenCast(bus, on_src, on_fail).start()
+    loop.run()
+    if pipe["p"]:
+        pipe["p"].set_state(Gst.State.NULL)
+
+
 def main():
+    if "--diagnose" in sys.argv[1:]:
+        diagnose()
+        return
     Daemon().run()
 
 
