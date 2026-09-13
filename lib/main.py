@@ -542,15 +542,31 @@ class Daemon:
     # that: 3 frames in 6 s, then 1, then none. pipewiresrc has the cure
     # built in: keepalive-time re-sends the last buffer every N ms while the
     # compositor is silent, which turns the stream back into a steady 30 fps.
+    #
+    # And the bigger one, from xdph's own journal of the same sessions:
+    # "[screencopy/pipewire] Out of buffers" ten times in the first second,
+    # then "Retrying screencopy (1/10)" until it gave up. The compositor
+    # hands the capture a SMALL pool of DMA-BUFs; pipewiresrc dequeues them
+    # as fast as they come and each one only goes back when the GstBuffer is
+    # released downstream. A live encoder takes a moment to come up, the
+    # pool drains in that moment, and xdph 1.4.1 (#424/#425) treats a
+    # consumer that returns buffers late as a dead one — the share freezes
+    # for good. So: (1) ask PipeWire for a deeper pool, and (2) a LEAKY
+    # queue right behind the source, so the push always returns at once and
+    # a frame the encoder is not ready for is dropped — which is the very
+    # act that hands its buffer back to the compositor. We were never going
+    # to send that frame anyway.
     KEEPALIVE_MS = 33
+    POOL_MIN = 6
 
     def _video_src(self):
         if os.environ.get("EWE_CAST_FAKE_SOURCE") or self.src_node is None:
             return "videotestsrc is-live=true pattern=smpte ! identity name=wd silent=true"
         # `wd` is where the watchdog counts frames — see _pipeline_run
         return (f"pipewiresrc fd={self.src_fd} path={self.src_node} do-timestamp=true "
-                f"keepalive-time={self.KEEPALIVE_MS} "
-                f"! identity name=wd silent=true")
+                f"keepalive-time={self.KEEPALIVE_MS} min-buffers={self.POOL_MIN} "
+                f"! identity name=wd silent=true "
+                f"! queue max-size-buffers=2 max-size-time=0 max-size-bytes=0 leaky=downstream")
 
     def _aac(self):
         # AAC encoder roulette: fdk (bad+libfdk) is the usual Arch resident,
