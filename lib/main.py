@@ -441,7 +441,7 @@ class Daemon:
             f"! h264parse config-interval=1 ! queue ! mux.sink_4113"
         aud = (f" pulsesrc device={AudioRouter.SINK}.monitor ! audioconvert ! audioresample "
                f"! audio/x-raw,rate=48000,channels=2 ! {aac} "
-               f"! aacparse ! queue ! mux.sink_4352" if audio and aac else "")
+               f"! aacparse ! queue max-size-time=1000000000 leaky=downstream ! mux.sink_4352" if audio and aac else "")
         # a REAL RTP session (rtpbin), not a bare udpsink: rtpbin emits the
         # RTCP sender reports Samsung renderers need before they present a
         # single frame (field catch #6 — gnd's gst-rtsp-server does this,
@@ -531,11 +531,25 @@ class Daemon:
             probe.close()
 
     # ── pipeline ──────────────────────────────────────────────────────────
+    # The portal's screencast is DAMAGE-DRIVEN: the compositor hands PipeWire
+    # a frame when something on screen changes and nothing when nothing
+    # does. A Miracast sink wants a constant frame rate, and mpegtsmux waits
+    # for video before it will emit the audio muxed beside it — so a quiet
+    # desktop meant no frames, a TS stream that stopped, pulsesrc dropping
+    # samples "because downstream can't keep up", the TV freezing on its
+    # last picture, and the watchdog below tearing the session down after
+    # 6 s ("no frames — stalled"). The field logs of 8 and 13 Sep are exactly
+    # that: 3 frames in 6 s, then 1, then none. pipewiresrc has the cure
+    # built in: keepalive-time re-sends the last buffer every N ms while the
+    # compositor is silent, which turns the stream back into a steady 30 fps.
+    KEEPALIVE_MS = 33
+
     def _video_src(self):
         if os.environ.get("EWE_CAST_FAKE_SOURCE") or self.src_node is None:
             return "videotestsrc is-live=true pattern=smpte ! identity name=wd silent=true"
         # `wd` is where the watchdog counts frames — see _pipeline_run
         return (f"pipewiresrc fd={self.src_fd} path={self.src_node} do-timestamp=true "
+                f"keepalive-time={self.KEEPALIVE_MS} "
                 f"! identity name=wd silent=true")
 
     def _aac(self):
@@ -575,6 +589,7 @@ class Daemon:
     # through the identity after the source; no frame for STALL_S seconds
     # while we claim to be streaming is a failure, reported as one.
     STALL_S = 6
+    FROZEN_S = 30        # repeats only, this long → tell the user, keep streaming
 
     def _pipeline_run(self, line):
         self._pipeline_stop()
@@ -588,6 +603,11 @@ class Daemon:
         gbus.connect("message::state-changed", self._gst_state)
         self._frames = 0
         self._frames_seen = 0
+        self._fresh = 0              # frames that were NOT a keep-alive repeat
+        self._fresh_seen = 0
+        self._last_offset = None
+        self._frozen_for = 0
+        self._frozen_told = False
         wd = self.pipeline.get_by_name("wd")
         if wd:
             wd.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._on_frame)
@@ -596,6 +616,14 @@ class Daemon:
 
     def _on_frame(self, pad, info):
         self._frames += 1
+        # pipewiresrc stamps each buffer's offset with PipeWire's sequence
+        # number; a keep-alive re-push carries the same buffer, so a repeated
+        # offset means "nothing new from the compositor". The test source has
+        # no offsets — every buffer counts as fresh there.
+        off = info.get_buffer().offset
+        if off == Gst.BUFFER_OFFSET_NONE or off != self._last_offset:
+            self._fresh += 1
+            self._last_offset = off
         return Gst.PadProbeReturn.OK
 
     def _check_stall(self):
@@ -606,8 +634,25 @@ class Daemon:
             self.stop("the screen capture stalled — no frames for "
                       f"{self.STALL_S}s (portal / PipeWire). Stop and start the cast again")
             return False
-        print(f"watchdog: {self._frames - self._frames_seen} frames / {self.STALL_S}s", flush=True)
+        fresh = self._fresh - self._fresh_seen
+        print(f"watchdog: {self._frames - self._frames_seen} frames / {self.STALL_S}s ({fresh} fresh)", flush=True)
         self._frames_seen = self._frames
+        self._fresh_seen = self._fresh
+        # a picture that stopped changing is either a quiet desktop (fine) or
+        # a capture the compositor abandoned (xdph #424): after FROZEN_S of
+        # repeats only, say so once — the stream stays up and the audio keeps
+        # going, which beats the old teardown for both cases
+        if fresh == 0:
+            self._frozen_for += self.STALL_S
+            if self._frozen_for >= self.FROZEN_S and not self._frozen_told and self.state == "streaming":
+                self._frozen_told = True
+                self._set("streaming", "the picture has not changed for a while — if the TV is "
+                                       "frozen, stop and start the cast again")
+        else:
+            if self._frozen_told:
+                self._set("streaming", "")
+            self._frozen_for = 0
+            self._frozen_told = False
         return True
 
     def _gst_error(self, bus, msg):
