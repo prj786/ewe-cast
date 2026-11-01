@@ -1,6 +1,6 @@
 # Maintainer: scubba
 #
-# The ewe casting daemon as a pacman package, served from the [ewe]
+# ewe Cast, the ewe casting daemon, as a pacman package, served from the [ewe]
 # repository — built by the ewe-repo publish workflow exactly like the ewe
 # package itself (pkgver rewritten to the latest release tag, makepkg -f).
 # Headless on purpose: the shell's Cast card is the UI (RFC-004), this ships
@@ -15,7 +15,7 @@ pkgname=ewe-cast
 _tag=v0.12.3-beta
 pkgver=0.12.3beta
 pkgrel=1
-pkgdesc="ewe casting daemon — Miracast (WFD) and Chromecast, headless, driven from Control Center"
+pkgdesc="ewe Cast — the ewe casting daemon: Miracast (WFD) and Chromecast, headless, driven from Quick settings"
 arch=('any')
 url="https://github.com/prj786/ewe-cast"
 license=('GPL-2.0-only')

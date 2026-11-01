@@ -1,4 +1,6 @@
-# ewe-cast
+# ewe Cast
+
+The ewe casting daemon: package and repo `ewe-cast`, the daemon `ewe-castd`.
 
 **RFC-004 · phases A+B built (2026-08-30), Miracast proven against a loopback
 sink — first real-TV field test pending**
@@ -8,9 +10,9 @@ gnome-network-displays — a gtk4/libadwaita window in a DE that deliberately
 has neither, driven by SIGTERM. The screen-sharing *plumbing* is already
 ours (xdg-desktop-portal + PipeWire + the shell's own SharePicker); only
 the sink protocols live in that app. `ewe-castd` moves them into a headless
-daemon so the whole flow lives in Quick Settings.
+daemon so the whole flow lives in Quick settings.
 
-## The user flow (all in Control Center)
+## The user flow (all in Quick settings)
 
 1. Cast card → expands to a sink list (live scan: Miracast peers via
    NetworkManager P2P, Chromecasts via avahi).
@@ -20,7 +22,7 @@ daemon so the whole flow lives in Quick Settings.
 
 ## Architecture
 
-    Quick Settings (Cast card)
+    Quick settings (Cast tile + page, the Cast to TV plugin)
         │  qs ipc / D-Bus verbs: scan · sinks · start <sink> · stop · status
     ewe-castd  (Rust daemon, own repo = this one)
         ├─ source: xdg-desktop-portal ScreenCast → PipeWire stream
