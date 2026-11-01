@@ -3,7 +3,7 @@
 # shell so a hot-reload or crash of ewe.service cannot drop a running
 # presentation.
 [Unit]
-Description=ewe casting daemon (Miracast/Chromecast source)
+Description=ewe Cast — the casting daemon (Miracast/Chromecast source)
 
 [Service]
 ExecStart=/usr/bin/ewe-castd
